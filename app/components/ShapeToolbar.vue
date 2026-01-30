@@ -6,6 +6,7 @@ import SquareIcon from './icons/SquareIcon.vue'
 import TriangleIcon from './icons/TriangleIcon.vue'
 import CircleIcon from './icons/CircleIcon.vue'
 import LineIcon from './icons/LineIcon.vue'
+import CurveIcon from './icons/CurveIcon.vue'
 import TrashIcon from './icons/TrashIcon.vue'
 import PaintIcon from './icons/PaintIcon.vue'
 
@@ -23,11 +24,10 @@ const props = defineProps<Props>()
 const emit = defineEmits<Emits>()
 
 const isPanMode = computed(() => props.currentTool === 'pan')
-const isSelectMode = computed(() => props.currentTool === 'select')
 
 function handleHandClick() {
-  // Toggle between pan and select
-  emit('tool-change', isSelectMode.value ? 'pan' : 'select')
+  // Toggle pan mode on/off
+  emit('tool-change', isPanMode.value ? 'square' : 'pan')
 }
 
 function handleToolClick(tool: ToolMode) {
@@ -46,12 +46,12 @@ function handleColorChange(color: string) {
       <button
         :class="[
           'p-2 rounded-lg transition-colors',
-          (isPanMode || isSelectMode) 
+          isPanMode
             ? 'bg-blue-900 text-blue-400' 
             : 'hover:bg-gray-800 text-gray-300'
         ]"
         @click="handleHandClick"
-        :title="isSelectMode ? 'Select mode (click to pan)' : 'Pan mode (click to select)'"
+        :title="isPanMode ? 'Pan mode (click to exit)' : 'Pan mode (click to pan canvas)'"
       >
         <HandIcon />
       </button>
@@ -110,6 +110,19 @@ function handleColorChange(color: string) {
         title="Line (connect shapes)"
       >
         <LineIcon />
+      </button>
+
+      <button
+        :class="[
+          'p-2 rounded-lg transition-colors',
+          currentTool === 'curved-line'
+            ? 'bg-blue-900 text-blue-400'
+            : 'hover:bg-gray-800 text-gray-300'
+        ]"
+        @click="handleToolClick('curved-line')"
+        title="Curved line (connect shapes with arc)"
+      >
+        <CurveIcon />
       </button>
 
       <!-- Divider -->

@@ -9,11 +9,21 @@ export interface BaseShape {
   fill: string
 }
 
+export interface ConnectionAnchor {
+  // Normalized position (0-1) around shape perimeter at 0.1 increments
+  // 0 = top, 0.25 = right, 0.5 = bottom, 0.75 = left
+  // 10 snap points total (0, 0.1, 0.2, ... 0.9) for precise control
+  position: number
+}
+
 export interface Connection {
   id: string
   fromShapeId: string
   toShapeId: string
+  fromAnchor: ConnectionAnchor
+  toAnchor: ConnectionAnchor
   stroke: string
+  curved: boolean  // whether to render as arc
 }
 
 export interface AlignmentGuide {
@@ -29,4 +39,4 @@ export interface SpacingGuide {
   distance: number
 }
 
-export type ToolMode = 'pan' | 'select' | 'square' | 'triangle' | 'circle' | 'line' | 'delete' | 'paint'
+export type ToolMode = 'pan' | 'square' | 'triangle' | 'circle' | 'line' | 'curved-line' | 'delete' | 'paint'

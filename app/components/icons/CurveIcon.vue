@@ -9,9 +9,6 @@
     stroke-linejoin="round"
     class="w-5 h-5"
   >
-    <path d="M11 12V4a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v8" />
-    <path d="M15 12V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v6" />
-    <path d="M19 12V8a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v4" />
-    <path d="M3 12v8a8 8 0 0 0 8 8 8 8 0 0 0 8-8v-4" />
+    <path d="M3 12c0 0 4-8 9-8s9 8 9 8" />
   </svg>
 </template>
