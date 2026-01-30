@@ -1,14 +1,20 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, inject } from 'vue'
-import type { BaseShape } from '~/types/canvas'
+import type { BaseShape, AnimationConfig } from '~/types/canvas'
 import type { Context } from 'konva/lib/Context'
 import { getAnchorPosition, findNearestAnchor } from '~/composables/useCanvasState'
 import type { ConnectionAnchor } from '~/types/canvas'
+import { usePathAnimation } from '~/composables/usePathAnimation'
 
 const canvasState = inject<ReturnType<typeof import('~/composables/useCanvasState').useCanvasState>>('canvasState')
+const animationConfig = inject<() => AnimationConfig>('animationConfig')
 
 if (!canvasState) {
   throw new Error('CanvasEditor: canvasState not provided')
+}
+
+if (!animationConfig) {
+  throw new Error('CanvasEditor: animationConfig not provided')
 }
 
 const {
@@ -32,6 +38,17 @@ const {
   updateConnectionAnchor,
   updateConnectionCurveOffset,
 } = canvasState
+
+// Set up path animation
+const { isPlaying: isAnimating, animationDots } = usePathAnimation(
+  () => connections.value,
+  () => shapes.value,
+  animationConfig
+)
+
+// Computed for animation rendering config
+const animDotSize = computed(() => animationConfig().dotSize)
+const animDotColor = computed(() => animationConfig().dotColor)
 
 const stageWidth = ref(0)
 const stageHeight = ref(0)
@@ -274,9 +291,15 @@ const linePositions = computed(() => {
       // Use stored curve offset for control point
       const midX = (from.x + to.x) / 2
       const midY = (from.y + to.y) / 2
+      const controlX = midX + conn.curveOffset.x
+      const controlY = midY + conn.curveOffset.y
+      // Use SVG quadratic bezier path for accurate curve rendering
+      // M = move to start, Q = quadratic bezier (control point, end point)
+      const pathData = `M ${from.x} ${from.y} Q ${controlX} ${controlY} ${to.x} ${to.y}`
       return {
         id: conn.id,
-        points: [from.x, from.y, midX + conn.curveOffset.x, midY + conn.curveOffset.y, to.x, to.y],
+        points: [from.x, from.y, controlX, controlY, to.x, to.y],
+        pathData,
         stroke: conn.stroke,
         curved: true,
       }
@@ -285,10 +308,11 @@ const linePositions = computed(() => {
     return {
       id: conn.id,
       points: [from.x, from.y, to.x, to.y],
+      pathData: null,
       stroke: conn.stroke,
       curved: false,
     }
-  }).filter(Boolean) as Array<{ id: string; points: number[]; stroke: string; curved: boolean }>
+  }).filter(Boolean) as Array<{ id: string; points: number[]; pathData: string | null; stroke: string; curved: boolean }>
 })
 
 function updateStageSize() {
@@ -727,7 +751,6 @@ onUnmounted(() => {
         name="gridLayer" 
         :config="{ 
           listening: false,
-          hitGraphEnabled: false,
         }"
       >
         <VShape
@@ -739,17 +762,17 @@ onUnmounted(() => {
         />
       </VLayer>
 
-      <!-- Lines Layer -->
-      <VLayer name="linesLayer">
+      <!-- Content Layer - Lines, Shapes, and Animation Dots -->
+      <VLayer name="contentLayer">
+        <!-- Straight lines -->
         <VLine
-          v-for="line in linePositions"
+          v-for="line in linePositions.filter(l => !l.curved)"
           :key="line.id"
           :config="{
             id: line.id,
             points: line.points,
             stroke: line.stroke,
             strokeWidth: selectedConnectionId === line.id ? 4 : 3,
-            tension: line.curved ? 1 : 0,
             lineCap: 'round',
             lineJoin: 'round',
             hitStrokeWidth: 12,
@@ -757,10 +780,23 @@ onUnmounted(() => {
           }"
           @click="handleConnectionClick(line.id)"
         />
-      </VLayer>
+        <!-- Curved lines using SVG quadratic bezier path -->
+        <VPath
+          v-for="line in linePositions.filter(l => l.curved)"
+          :key="line.id"
+          :config="{
+            id: line.id,
+            data: line.pathData,
+            stroke: line.stroke,
+            strokeWidth: selectedConnectionId === line.id ? 4 : 3,
+            lineCap: 'round',
+            lineJoin: 'round',
+            listening: true,
+          }"
+          @click="handleConnectionClick(line.id)"
+        />
 
-      <!-- Shapes Layer -->
-      <VLayer name="shapesLayer">
+        <!-- Shapes rendered second -->
         <VGroup
           v-for="shape in shapes"
           :key="shape.id"
@@ -826,10 +862,27 @@ onUnmounted(() => {
             }"
           />
         </VGroup>
+
+        <!-- Animation dots rendered last (on top) -->
+        <VCircle
+          v-for="(dot, index) in animationDots"
+          :key="`anim-dot-${index}`"
+          :config="{
+            x: dot.x,
+            y: dot.y,
+            radius: animDotSize,
+            fill: animDotColor,
+            shadowBlur: 10,
+            shadowColor: animDotColor,
+            shadowOpacity: 0.8,
+            listening: false,
+          }"
+        />
       </VLayer>
 
-      <!-- Connection Points Layer -->
-      <VLayer name="connectionPointsLayer">
+      <!-- Interaction Layer - Connection Points and Endpoint Handles -->
+      <VLayer name="interactionLayer">
+        <!-- Connection Point Indicators -->
         <VCircle
           v-for="(indicator, index) in connectionPointIndicators"
           :key="`anchor-${indicator.shapeId}-${index}`"
@@ -846,10 +899,8 @@ onUnmounted(() => {
           }"
           @click="(e) => handleAnchorIndicatorClick(e, indicator.shapeId, indicator.position)"
         />
-      </VLayer>
 
-      <!-- Endpoint Handles Layer -->
-      <VLayer name="endpointHandlesLayer">
+        <!-- Endpoint Handles -->
         <VCircle
           v-for="(handle, index) in endpointHandles"
           :key="`endpoint-${handle.type}-${index}`"

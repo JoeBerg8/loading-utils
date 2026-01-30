@@ -41,3 +41,11 @@ export interface SpacingGuide {
 }
 
 export type ToolMode = 'pan' | 'square' | 'triangle' | 'circle' | 'line' | 'curved-line' | 'delete' | 'paint'
+
+export interface AnimationConfig {
+  enabled: boolean
+  speed: number  // 0.5 to 3.0 multiplier
+  dotSize: number
+  dotColor: string
+  trailLength: number  // 0 = no trail, 1 = full path
+}

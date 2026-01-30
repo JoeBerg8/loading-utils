@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { ToolMode } from '~/types/canvas'
+import type { ToolMode, AnimationConfig } from '~/types/canvas'
 import HandIcon from './icons/HandIcon.vue'
 import SquareIcon from './icons/SquareIcon.vue'
 import TriangleIcon from './icons/TriangleIcon.vue'
@@ -9,15 +9,20 @@ import LineIcon from './icons/LineIcon.vue'
 import CurveIcon from './icons/CurveIcon.vue'
 import TrashIcon from './icons/TrashIcon.vue'
 import PaintIcon from './icons/PaintIcon.vue'
+import PlayIcon from './icons/PlayIcon.vue'
+import PauseIcon from './icons/PauseIcon.vue'
 
 interface Props {
   currentTool: ToolMode
   selectedColor: string
+  animationConfig: AnimationConfig
+  hasConnections: boolean
 }
 
 interface Emits {
   (e: 'tool-change', tool: ToolMode): void
   (e: 'color-change', color: string): void
+  (e: 'animation-config-change', config: Partial<AnimationConfig>): void
 }
 
 const props = defineProps<Props>()
@@ -36,6 +41,22 @@ function handleToolClick(tool: ToolMode) {
 
 function handleColorChange(color: string) {
   emit('color-change', color)
+}
+
+function toggleAnimation() {
+  emit('animation-config-change', { enabled: !props.animationConfig.enabled })
+}
+
+function handleSpeedChange(speed: number) {
+  emit('animation-config-change', { speed })
+}
+
+function handleDotSizeChange(dotSize: number) {
+  emit('animation-config-change', { dotSize })
+}
+
+function handleDotColorChange(dotColor: string) {
+  emit('animation-config-change', { dotColor })
 }
 </script>
 
@@ -176,6 +197,71 @@ function handleColorChange(color: string) {
       >
         <TrashIcon />
       </button>
+
+      <!-- Divider -->
+      <div class="w-px h-6 bg-gray-600 mx-1" />
+
+      <!-- Animation Control -->
+      <UPopover>
+        <button
+          :class="[
+            'p-2 rounded-lg transition-colors',
+            animationConfig.enabled
+              ? 'bg-green-900 text-green-400'
+              : 'hover:bg-gray-800 text-gray-300'
+          ]"
+          :disabled="!hasConnections"
+          @click="toggleAnimation"
+          :title="animationConfig.enabled ? 'Pause animation' : 'Play animation'"
+        >
+          <PlayIcon v-if="!animationConfig.enabled" />
+          <PauseIcon v-else />
+        </button>
+
+        <template #content>
+          <div class="p-3 space-y-4 min-w-[200px]">
+            <div>
+              <label class="block text-sm font-medium text-gray-300 mb-2">
+                Speed: {{ animationConfig.speed.toFixed(1) }}x
+              </label>
+              <input
+                type="range"
+                min="0.5"
+                max="3"
+                step="0.1"
+                :value="animationConfig.speed"
+                @input="(e) => handleSpeedChange(parseFloat((e.target as HTMLInputElement).value))"
+                class="w-full"
+              />
+            </div>
+
+            <div>
+              <label class="block text-sm font-medium text-gray-300 mb-2">
+                Dot Size: {{ animationConfig.dotSize }}px
+              </label>
+              <input
+                type="range"
+                min="4"
+                max="16"
+                step="1"
+                :value="animationConfig.dotSize"
+                @input="(e) => handleDotSizeChange(parseInt((e.target as HTMLInputElement).value))"
+                class="w-full"
+              />
+            </div>
+
+            <div>
+              <label class="block text-sm font-medium text-gray-300 mb-2">
+                Dot Color
+              </label>
+              <UColorPicker
+                :model-value="animationConfig.dotColor"
+                @update:model-value="handleDotColorChange"
+              />
+            </div>
+          </div>
+        </template>
+      </UPopover>
     </div>
   </div>
 </template>
