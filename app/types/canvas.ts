@@ -23,7 +23,8 @@ export interface Connection {
   fromAnchor: ConnectionAnchor
   toAnchor: ConnectionAnchor
   stroke: string
-  curved: boolean  // whether to render as arc
+  // null = straight line, { x, y } = offset from midpoint for curve control
+  curveOffset: { x: number; y: number } | null
 }
 
 export interface AlignmentGuide {

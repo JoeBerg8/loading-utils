@@ -1,6 +1,7 @@
 import type { BaseShape, AlignmentGuide, SpacingGuide } from '~/types/canvas'
 
 const ALIGNMENT_TOLERANCE = 8 // pixels
+const GUIDE_EXTENSION = 10000 // Extend guides well beyond viewport
 
 function getShapeBounds(shape: BaseShape) {
   if (shape.type === 'circle') {
@@ -90,8 +91,8 @@ export function useAlignmentGuides() {
       alignmentGuides.push({
         type: 'vertical',
         position: x,
-        start: viewportBounds.top,
-        end: viewportBounds.bottom,
+        start: viewportBounds.top - GUIDE_EXTENSION,
+        end: viewportBounds.bottom + GUIDE_EXTENSION,
       })
     }
 
@@ -100,8 +101,8 @@ export function useAlignmentGuides() {
       alignmentGuides.push({
         type: 'horizontal',
         position: y,
-        start: viewportBounds.left,
-        end: viewportBounds.right,
+        start: viewportBounds.left - GUIDE_EXTENSION,
+        end: viewportBounds.right + GUIDE_EXTENSION,
       })
     }
 

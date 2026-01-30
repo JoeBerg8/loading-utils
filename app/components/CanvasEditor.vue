@@ -22,6 +22,7 @@ const {
   spacingGuides,
   updateShapePosition,
   handleShapeClick,
+  handleAnchorClick,
   handleConnectionClick,
   handleCanvasClick,
   computeGuidesForDrag,
@@ -29,6 +30,7 @@ const {
   removeShape,
   removeConnection,
   updateConnectionAnchor,
+  updateConnectionCurveOffset,
 } = canvasState
 
 const stageWidth = ref(0)
@@ -55,6 +57,10 @@ const mousePosition = ref<{ x: number; y: number } | null>(null)
 const draggingEndpoint = ref<'from' | 'to' | null>(null)
 const draggingEndpointPosition = ref<{ x: number; y: number } | null>(null)
 const nearestShapeForEndpoint = ref<string | null>(null)
+
+// Track curve control dragging state
+const draggingCurveControl = ref(false)
+const draggingCurveControlPosition = ref<{ x: number; y: number } | null>(null)
 
 // Custom grid drawing function - draws all dots in a single canvas pass
 // This is orders of magnitude faster than creating thousands of VCircle components
@@ -132,14 +138,14 @@ const connectionPointIndicators = computed(() => {
     return []
   }
 
-  const indicators: Array<{ shapeId: string; position: number; x: number; y: number; isHighlighted: boolean }> = []
+  const indicators: Array<{ shapeId: string; position: number; x: number; y: number; isHighlighted: boolean; isSelected: boolean }> = []
   
   // Show indicators for hovered shape, pending line start shape, or shape near dragging endpoint
   const shapesToShow = shapes.value.filter(s => {
     if (draggingEndpoint.value !== null) {
       return s.id === nearestShapeForEndpoint.value
     }
-    return s.id === hoveredShapeId.value || s.id === pendingLineStart.value
+    return s.id === hoveredShapeId.value || (pendingLineStart.value && s.id === pendingLineStart.value.shapeId)
   })
 
   for (const shape of shapesToShow) {
@@ -159,12 +165,29 @@ const connectionPointIndicators = computed(() => {
         isHighlighted = distance < 20
       }
       
+      // Check if this is the selected anchor for pending line start
+      const isSelected = pendingLineStart.value !== null && 
+        pendingLineStart.value.shapeId === shape.id &&
+        Math.abs(pendingLineStart.value.anchor.position - position) < 0.05
+      
+      // Also highlight anchor when mouse is near it (for better UX)
+      if (!isHighlighted && mousePosition.value && (currentTool.value === 'line' || currentTool.value === 'curved-line')) {
+        const dx = anchorPos.x - mousePosition.value.x
+        const dy = anchorPos.y - mousePosition.value.y
+        const distance = Math.sqrt(dx * dx + dy * dy)
+        // Highlight if within 15px
+        if (distance < 15) {
+          isHighlighted = true
+        }
+      }
+      
       indicators.push({
         shapeId: shape.id,
         position,
         x: anchorPos.x,
         y: anchorPos.y,
         isHighlighted,
+        isSelected,
       })
     }
   }
@@ -205,6 +228,33 @@ const endpointHandles = computed(() => {
   ]
 })
 
+// Compute curve control handle for selected curved connection
+const curveControlHandle = computed(() => {
+  if (!selectedConnectionId.value) return null
+  
+  const connection = connections.value.find(c => c.id === selectedConnectionId.value)
+  if (!connection || connection.curveOffset === null) return null
+  
+  const fromShape = shapes.value.find(s => s.id === connection.fromShapeId)
+  const toShape = shapes.value.find(s => s.id === connection.toShapeId)
+  if (!fromShape || !toShape) return null
+  
+  const from = connection.fromAnchor 
+    ? getAnchorPosition(fromShape, connection.fromAnchor)
+    : getShapeCenter(fromShape)
+  const to = connection.toAnchor
+    ? getAnchorPosition(toShape, connection.toAnchor)
+    : getShapeCenter(toShape)
+  
+  const midX = (from.x + to.x) / 2
+  const midY = (from.y + to.y) / 2
+  
+  return {
+    x: midX + connection.curveOffset.x,
+    y: midY + connection.curveOffset.y,
+  }
+})
+
 // Compute line positions for connections using anchor points
 const linePositions = computed(() => {
   return connections.value.map(conn => {
@@ -220,33 +270,13 @@ const linePositions = computed(() => {
       ? getAnchorPosition(toShape, conn.toAnchor)
       : getShapeCenter(toShape)
     
-    if (conn.curved) {
-      // Calculate quadratic bezier control point
-      // Use the line between anchor points for perpendicular calculation
+    if (conn.curveOffset !== null) {
+      // Use stored curve offset for control point
       const midX = (from.x + to.x) / 2
       const midY = (from.y + to.y) / 2
-      const dx = to.x - from.x
-      const dy = to.y - from.y
-      const len = Math.sqrt(dx * dx + dy * dy)
-      
-      // If shapes are at the same position, fall back to straight line
-      if (len === 0) {
-        return {
-          id: conn.id,
-          points: [from.x, from.y, to.x, to.y],
-          stroke: conn.stroke,
-          curved: false,
-        }
-      }
-      
-      // Perpendicular offset (30% of line length)
-      // Calculate perpendicular to the anchor-to-anchor line
-      const offset = len * 0.3
-      const perpX = -dy / len * offset
-      const perpY = dx / len * offset
       return {
         id: conn.id,
-        points: [from.x, from.y, midX + perpX, midY + perpY, to.x, to.y],
+        points: [from.x, from.y, midX + conn.curveOffset.x, midY + conn.curveOffset.y, to.x, to.y],
         stroke: conn.stroke,
         curved: true,
       }
@@ -451,6 +481,138 @@ function handleEndpointClick(e: any) {
   // Prevent line click when clicking endpoint handle
 }
 
+function handleCurveControlDragStart(e: any) {
+  e.cancelBubble = true
+  draggingCurveControl.value = true
+  const stage = e.target.getStage()
+  const pointerPos = stage.getPointerPosition()
+  if (pointerPos) {
+    const worldX = pointerPos.x - stage.x()
+    const worldY = pointerPos.y - stage.y()
+    draggingCurveControlPosition.value = { x: worldX, y: worldY }
+  }
+}
+
+function handleCurveControlDrag(e: any) {
+  if (!selectedConnectionId.value || !draggingCurveControl.value) return
+  
+  const stage = e.target.getStage()
+  const pointerPos = stage.getPointerPosition()
+  if (!pointerPos) return
+  
+  const worldX = pointerPos.x - stage.x()
+  const worldY = pointerPos.y - stage.y()
+  draggingCurveControlPosition.value = { x: worldX, y: worldY }
+  
+  const connection = connections.value.find(c => c.id === selectedConnectionId.value)
+  if (!connection || connection.curveOffset === null) return
+  
+  const fromShape = shapes.value.find(s => s.id === connection.fromShapeId)
+  const toShape = shapes.value.find(s => s.id === connection.toShapeId)
+  if (!fromShape || !toShape) return
+  
+  const from = connection.fromAnchor 
+    ? getAnchorPosition(fromShape, connection.fromAnchor)
+    : getShapeCenter(fromShape)
+  const to = connection.toAnchor
+    ? getAnchorPosition(toShape, connection.toAnchor)
+    : getShapeCenter(toShape)
+  
+  const midX = (from.x + to.x) / 2
+  const midY = (from.y + to.y) / 2
+  
+  // Calculate offset from midpoint
+  const offset = {
+    x: worldX - midX,
+    y: worldY - midY
+  }
+  
+  // Update in real-time
+  updateConnectionCurveOffset(selectedConnectionId.value, offset)
+}
+
+function handleCurveControlDragEnd(e: any) {
+  if (!selectedConnectionId.value || !draggingCurveControl.value) {
+    draggingCurveControl.value = false
+    draggingCurveControlPosition.value = null
+    return
+  }
+  
+  const stage = e.target.getStage()
+  const pointerPos = stage.getPointerPosition()
+  if (pointerPos) {
+    const worldX = pointerPos.x - stage.x()
+    const worldY = pointerPos.y - stage.y()
+    
+    const connection = connections.value.find(c => c.id === selectedConnectionId.value)
+    if (connection && connection.curveOffset !== null) {
+      const fromShape = shapes.value.find(s => s.id === connection.fromShapeId)
+      const toShape = shapes.value.find(s => s.id === connection.toShapeId)
+      if (fromShape && toShape) {
+        const from = connection.fromAnchor 
+          ? getAnchorPosition(fromShape, connection.fromAnchor)
+          : getShapeCenter(fromShape)
+        const to = connection.toAnchor
+          ? getAnchorPosition(toShape, connection.toAnchor)
+          : getShapeCenter(toShape)
+        
+        const midX = (from.x + to.x) / 2
+        const midY = (from.y + to.y) / 2
+        
+        // Calculate final offset from midpoint
+        const offset = {
+          x: worldX - midX,
+          y: worldY - midY
+        }
+        
+        updateConnectionCurveOffset(selectedConnectionId.value, offset)
+      }
+    }
+  }
+  
+  draggingCurveControl.value = false
+  draggingCurveControlPosition.value = null
+}
+
+function handleCurveControlClick(e: any) {
+  e.cancelBubble = true
+  // Prevent line click when clicking curve control handle
+}
+
+function handleAnchorIndicatorClick(e: any, shapeId: string, position: number) {
+  e.cancelBubble = true
+  if (currentTool.value === 'line' || currentTool.value === 'curved-line') {
+    handleAnchorClick(shapeId, { position })
+  }
+}
+
+function handleShapeClickWithAnchorDetection(shapeId: string, clickX: number, clickY: number) {
+  // If in line/curved-line mode, check if click is near an anchor point
+  if (currentTool.value === 'line' || currentTool.value === 'curved-line') {
+    const shape = shapes.value.find(s => s.id === shapeId)
+    if (shape) {
+      // Check if click is near any anchor point
+      for (let i = 0; i < 10; i++) {
+        const position = i / 10
+        const anchor = { position }
+        const anchorPos = getAnchorPosition(shape, anchor)
+        const dx = anchorPos.x - clickX
+        const dy = anchorPos.y - clickY
+        const distance = Math.sqrt(dx * dx + dy * dy)
+        
+        // If within 20px of an anchor, use anchor click handler
+        if (distance < 20) {
+          handleAnchorClick(shapeId, anchor)
+          return
+        }
+      }
+    }
+  }
+  
+  // Otherwise, use regular shape click handler
+  handleShapeClick(shapeId)
+}
+
 function handleShapeMouseEnter(e: any) {
   if (currentTool.value === 'line' || currentTool.value === 'curved-line') {
     const shapeId = e.target.getParent().id()
@@ -608,7 +770,17 @@ onUnmounted(() => {
             y: shape.y,
             draggable: currentTool !== 'delete',
           }"
-          @click="handleShapeClick(shape.id)"
+          @click="(e) => {
+            const stage = e.target.getStage()
+            const pointerPos = stage.getPointerPosition()
+            if (pointerPos) {
+              const worldX = pointerPos.x - stage.x()
+              const worldY = pointerPos.y - stage.y()
+              handleShapeClickWithAnchorDetection(shape.id, worldX, worldY)
+            } else {
+              handleShapeClick(shape.id)
+            }
+          }"
           @dragmove="handleShapeDragMove"
           @dragend="handleShapeDragEnd"
           @mouseenter="handleShapeMouseEnter"
@@ -657,20 +829,22 @@ onUnmounted(() => {
       </VLayer>
 
       <!-- Connection Points Layer -->
-      <VLayer name="connectionPointsLayer" :config="{ listening: false }">
+      <VLayer name="connectionPointsLayer">
         <VCircle
           v-for="(indicator, index) in connectionPointIndicators"
           :key="`anchor-${indicator.shapeId}-${index}`"
           :config="{
             x: indicator.x,
             y: indicator.y,
-            radius: indicator.isHighlighted ? 6 : 4,
-            fill: indicator.isHighlighted ? '#ffffff' : '#60a5fa',
-            stroke: indicator.isHighlighted ? '#60a5fa' : '#ffffff',
-            strokeWidth: indicator.isHighlighted ? 2 : 1,
-            opacity: indicator.isHighlighted ? 1 : 0.8,
-            listening: false,
+            radius: indicator.isSelected ? 7 : (indicator.isHighlighted ? 6 : 4),
+            fill: indicator.isSelected ? '#10b981' : (indicator.isHighlighted ? '#ffffff' : '#60a5fa'),
+            stroke: indicator.isSelected ? '#059669' : (indicator.isHighlighted ? '#60a5fa' : '#ffffff'),
+            strokeWidth: indicator.isSelected ? 2 : (indicator.isHighlighted ? 2 : 1),
+            opacity: indicator.isSelected ? 1 : (indicator.isHighlighted ? 1 : 0.8),
+            listening: true,
+            hitStrokeWidth: 15,
           }"
+          @click="(e) => handleAnchorIndicatorClick(e, indicator.shapeId, indicator.position)"
         />
       </VLayer>
 
@@ -693,6 +867,25 @@ onUnmounted(() => {
           @dragstart="(e) => handleEndpointDragStart(e, handle.type)"
           @dragmove="handleEndpointDragMove"
           @dragend="handleEndpointDragEnd"
+        />
+        
+        <!-- Curve Control Handle (when curved line is selected) -->
+        <VCircle
+          v-if="curveControlHandle"
+          :config="{
+            x: draggingCurveControlPosition ? draggingCurveControlPosition.x : curveControlHandle.x,
+            y: draggingCurveControlPosition ? draggingCurveControlPosition.y : curveControlHandle.y,
+            radius: 6,
+            fill: '#3b82f6',
+            stroke: '#1d4ed8',
+            strokeWidth: 2,
+            draggable: true,
+            listening: true,
+          }"
+          @click="handleCurveControlClick"
+          @dragstart="handleCurveControlDragStart"
+          @dragmove="handleCurveControlDrag"
+          @dragend="handleCurveControlDragEnd"
         />
       </VLayer>
 

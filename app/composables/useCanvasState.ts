@@ -159,10 +159,10 @@ export function findNearestAnchor(
 export function useCanvasState() {
   const shapes = ref<BaseShape[]>([])
   const connections = ref<Connection[]>([])
-  const currentTool = ref<ToolMode>('pan')
+  const currentTool = ref<ToolMode>('square')
   const selectedShapeId = ref<string | null>(null)
   const selectedConnectionId = ref<string | null>(null)
-  const pendingLineStart = ref<string | null>(null)
+  const pendingLineStart = ref<{ shapeId: string; anchor: ConnectionAnchor } | null>(null)
   const selectedColor = ref<string>('#60a5fa')
   const activeGuides = ref<AlignmentGuide[]>([])
   const spacingGuides = ref<SpacingGuide[]>([])
@@ -253,22 +253,44 @@ export function useCanvasState() {
     return { x: shape.x + width / 2, y: shape.y + height / 2 }
   }
 
-  function addConnection(fromShapeId: string, toShapeId: string) {
-    // Prevent duplicate connections
-    const exists = connections.value.some(
-      c => (c.fromShapeId === fromShapeId && c.toShapeId === toShapeId) ||
-           (c.fromShapeId === toShapeId && c.toShapeId === fromShapeId)
-    )
-    if (exists) return
+  // Helper to calculate default curve offset
+  function calculateDefaultCurveOffset(from: { x: number; y: number }, to: { x: number; y: number }): { x: number; y: number } {
+    const dx = to.x - from.x
+    const dy = to.y - from.y
+    const len = Math.sqrt(dx * dx + dy * dy)
+    if (len === 0) return { x: 0, y: 0 }
+    
+    // Default: 30% of line length, perpendicular direction
+    const offset = len * 0.3
+    return {
+      x: -dy / len * offset,
+      y: dx / len * offset
+    }
+  }
 
+  function addConnection(
+    fromShapeId: string,
+    toShapeId: string,
+    fromAnchorOverride?: ConnectionAnchor,
+    toAnchorOverride?: ConnectionAnchor
+  ) {
     const fromShape = shapes.value.find(s => s.id === fromShapeId)
     const toShape = shapes.value.find(s => s.id === toShapeId)
     
     if (!fromShape || !toShape) return
 
-    // Calculate best anchor positions based on direction between shapes
-    const fromAnchor: ConnectionAnchor = { position: calculateBestAnchor(fromShape, toShape, getShapeCenter) }
-    const toAnchor: ConnectionAnchor = { position: calculateBestAnchor(toShape, fromShape, getShapeCenter) }
+    // Use provided anchors or calculate best anchor positions based on direction between shapes
+    const fromAnchor: ConnectionAnchor = fromAnchorOverride || { position: calculateBestAnchor(fromShape, toShape, getShapeCenter) }
+    const toAnchor: ConnectionAnchor = toAnchorOverride || { position: calculateBestAnchor(toShape, fromShape, getShapeCenter) }
+
+    // Calculate curve offset if using curved line tool
+    let curveOffset: { x: number; y: number } | null = null
+    if (currentTool.value === 'curved-line') {
+      // Get anchor positions for default curve calculation
+      const fromPos = getAnchorPosition(fromShape, fromAnchor)
+      const toPos = getAnchorPosition(toShape, toAnchor)
+      curveOffset = calculateDefaultCurveOffset(fromPos, toPos)
+    }
 
     const id = `connection-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
     connections.value.push({ 
@@ -278,7 +300,7 @@ export function useCanvasState() {
       fromAnchor,
       toAnchor,
       stroke: selectedColor.value,
-      curved: currentTool.value === 'curved-line'
+      curveOffset
     })
   }
 
@@ -293,6 +315,13 @@ export function useCanvasState() {
     const connection = connections.value.find(c => c.id === id)
     if (connection) {
       connection.stroke = color
+    }
+  }
+
+  function updateConnectionCurveOffset(id: string, offset: { x: number; y: number } | null) {
+    const connection = connections.value.find(c => c.id === id)
+    if (connection) {
+      connection.curveOffset = offset
     }
   }
 
@@ -347,6 +376,28 @@ export function useCanvasState() {
     }
   }
 
+  function handleAnchorClick(shapeId: string, anchor: ConnectionAnchor) {
+    if (currentTool.value !== 'line' && currentTool.value !== 'curved-line') {
+      return
+    }
+
+    if (pendingLineStart.value === null) {
+      // Start a new line from this anchor
+      pendingLineStart.value = { shapeId, anchor }
+      selectedShapeId.value = shapeId
+    } else if (pendingLineStart.value.shapeId !== shapeId) {
+      // Complete the line to this anchor
+      addConnection(pendingLineStart.value.shapeId, shapeId, pendingLineStart.value.anchor, anchor)
+      // Continue the line from this new anchor (for chaining)
+      pendingLineStart.value = { shapeId, anchor }
+      selectedShapeId.value = shapeId
+    } else {
+      // Same shape clicked - just update the anchor
+      pendingLineStart.value = { shapeId, anchor }
+      selectedShapeId.value = shapeId
+    }
+  }
+
   function handleShapeClick(shapeId: string) {
     if (currentTool.value === 'delete') {
       removeShape(shapeId)
@@ -354,13 +405,27 @@ export function useCanvasState() {
       updateShapeColor(shapeId, selectedColor.value)
       selectedShapeId.value = shapeId
     } else if (currentTool.value === 'line' || currentTool.value === 'curved-line') {
+      // Fallback: if clicking shape (not anchor), use auto-calculated anchor
+      const shape = shapes.value.find(s => s.id === shapeId)
+      if (!shape) return
+
       if (pendingLineStart.value === null) {
-        pendingLineStart.value = shapeId
+        // Calculate best anchor based on direction (will be refined when second shape is clicked)
+        const anchor: ConnectionAnchor = { position: 0 } // Default to top, will be recalculated
+        pendingLineStart.value = { shapeId, anchor }
         selectedShapeId.value = shapeId
-      } else if (pendingLineStart.value !== shapeId) {
-        addConnection(pendingLineStart.value, shapeId)
-        pendingLineStart.value = shapeId
-        selectedShapeId.value = shapeId
+      } else if (pendingLineStart.value.shapeId !== shapeId) {
+        // Complete the line - recalculate anchors based on actual direction
+        const fromShape = shapes.value.find(s => s.id === pendingLineStart.value!.shapeId)
+        const toShape = shapes.value.find(s => s.id === shapeId)
+        if (fromShape && toShape) {
+          const fromAnchor: ConnectionAnchor = { position: calculateBestAnchor(fromShape, toShape, getShapeCenter) }
+          const toAnchor: ConnectionAnchor = { position: calculateBestAnchor(toShape, fromShape, getShapeCenter) }
+          addConnection(pendingLineStart.value.shapeId, shapeId, fromAnchor, toAnchor)
+          // Continue from this shape
+          pendingLineStart.value = { shapeId, anchor: toAnchor }
+          selectedShapeId.value = shapeId
+        }
       }
     } else {
       // Select shape in any other mode (pan, square, triangle, circle)
@@ -402,10 +467,12 @@ export function useCanvasState() {
     removeConnection,
     updateConnectionColor,
     updateConnectionAnchor,
+    updateConnectionCurveOffset,
     setTool,
     selectShape,
     selectConnection,
     handleShapeClick,
+    handleAnchorClick,
     handleConnectionClick,
     handleCanvasClick,
     computeGuidesForDrag,
