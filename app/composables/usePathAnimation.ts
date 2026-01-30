@@ -10,8 +10,15 @@ export interface AnimationDot {
 }
 
 interface CircuitSegment {
-  connection: Connection
-  reversed: boolean  // true if we traverse this connection backward
+  type: 'connection' | 'transition'
+  // For connection segments
+  connection?: Connection
+  reversed?: boolean  // true if we traverse this connection backward
+  // For transition segments
+  shape?: BaseShape
+  fromAnchor?: number  // normalized 0-1 position along perimeter
+  toAnchor?: number    // normalized 0-1 position along perimeter
+  // Common
   startDistance: number
   endDistance: number
 }
@@ -35,6 +42,22 @@ export function usePathAnimation(
     const width = shape.width || 40
     const height = shape.height || 40
     return { x: shape.x + width / 2, y: shape.y + height / 2 }
+  }
+
+  // Get point on shape perimeter at normalized position (0-1)
+  function getPointOnShapePerimeter(shape: BaseShape, anchorPosition: number): { x: number; y: number } {
+    // Reuse the anchor position logic from useCanvasState
+    return getAnchorPosition(shape, { position: anchorPosition })
+  }
+
+  // Calculate transition length - straight line distance between two anchor positions
+  function calculateTransitionLength(shape: BaseShape, fromAnchor: number, toAnchor: number): number {
+    // Get actual pixel positions and calculate straight line distance
+    const fromPoint = getPointOnShapePerimeter(shape, fromAnchor)
+    const toPoint = getPointOnShapePerimeter(shape, toAnchor)
+    const dx = toPoint.x - fromPoint.x
+    const dy = toPoint.y - fromPoint.y
+    return Math.sqrt(dx * dx + dy * dy)
   }
 
   // Calculate point on straight line at progress t (0-1)
@@ -138,6 +161,36 @@ export function usePathAnimation(
     }
   }
 
+  // Helper to get exit anchor position for a connection segment
+  function getExitAnchor(connection: Connection, reversed: boolean): { shapeId: string; anchor: number | null } {
+    if (reversed) {
+      return {
+        shapeId: connection.fromShapeId,
+        anchor: connection.fromAnchor ? connection.fromAnchor.position : null,
+      }
+    } else {
+      return {
+        shapeId: connection.toShapeId,
+        anchor: connection.toAnchor ? connection.toAnchor.position : null,
+      }
+    }
+  }
+
+  // Helper to get entry anchor position for a connection
+  function getEntryAnchor(connection: Connection, reversed: boolean): { shapeId: string; anchor: number | null } {
+    if (reversed) {
+      return {
+        shapeId: connection.toShapeId,
+        anchor: connection.toAnchor ? connection.toAnchor.position : null,
+      }
+    } else {
+      return {
+        shapeId: connection.fromShapeId,
+        anchor: connection.fromAnchor ? connection.fromAnchor.position : null,
+      }
+    }
+  }
+
   // Build a circuit path from connections by linking them end-to-end
   function buildCircuit(connectionsList: Connection[]): CircuitSegment[] {
     if (connectionsList.length === 0) return []
@@ -146,6 +199,7 @@ export function usePathAnimation(
       const connection = connectionsList[0]
       const length = calculatePathLength(connection)
       return [{
+        type: 'connection',
         connection,
         reversed: false,
         startDistance: 0,
@@ -156,20 +210,24 @@ export function usePathAnimation(
     const segments: CircuitSegment[] = []
     const usedConnections = new Set<string>()
     let currentShapeId: string | null = null
+    let currentExitAnchor: number | null = null
     let cumulativeDistance = 0
 
     // Start with the first connection
     const firstConnection = connectionsList[0]
     usedConnections.add(firstConnection.id)
     const firstLength = calculatePathLength(firstConnection)
+    const firstExit = getExitAnchor(firstConnection, false)
     segments.push({
+      type: 'connection',
       connection: firstConnection,
       reversed: false,
       startDistance: cumulativeDistance,
       endDistance: cumulativeDistance + firstLength,
     })
     cumulativeDistance += firstLength
-    currentShapeId = firstConnection.toShapeId
+    currentShapeId = firstExit.shapeId
+    currentExitAnchor = firstExit.anchor
 
     // Continue building the path by finding connections that share endpoints
     while (usedConnections.size < connectionsList.length) {
@@ -179,34 +237,61 @@ export function usePathAnimation(
       for (const connection of connectionsList) {
         if (usedConnections.has(connection.id)) continue
 
+        let nextConnection: Connection | null = null
+        let nextReversed = false
+
         // Check if this connection starts at current shape (forward)
         if (connection.fromShapeId === currentShapeId) {
-          usedConnections.add(connection.id)
-          const length = calculatePathLength(connection)
-          segments.push({
-            connection,
-            reversed: false,
-            startDistance: cumulativeDistance,
-            endDistance: cumulativeDistance + length,
-          })
-          cumulativeDistance += length
-          currentShapeId = connection.toShapeId
-          foundNext = true
-          break
+          nextConnection = connection
+          nextReversed = false
+        }
+        // Check if this connection ends at current shape (reverse)
+        else if (connection.toShapeId === currentShapeId) {
+          nextConnection = connection
+          nextReversed = true
         }
 
-        // Check if this connection ends at current shape (reverse)
-        if (connection.toShapeId === currentShapeId) {
-          usedConnections.add(connection.id)
-          const length = calculatePathLength(connection)
+        if (nextConnection) {
+          usedConnections.add(nextConnection.id)
+          const entryAnchor = getEntryAnchor(nextConnection, nextReversed)
+
+          // Check if we need a transition segment
+          if (currentExitAnchor !== null && entryAnchor.anchor !== null && currentExitAnchor !== entryAnchor.anchor) {
+            // Need a transition along the shape perimeter
+            const shape = shapes().find(s => s.id === currentShapeId!)
+            if (shape) {
+              // Store anchors in original order - interpolation will choose shorter path
+              const fromAnchor = currentExitAnchor
+              const toAnchor = entryAnchor.anchor
+              
+              // Calculate transition length (always uses shorter path)
+              const transitionLength = calculateTransitionLength(shape, fromAnchor!, toAnchor!)
+              
+              segments.push({
+                type: 'transition',
+                shape,
+                fromAnchor: fromAnchor!,
+                toAnchor: toAnchor!,
+                startDistance: cumulativeDistance,
+                endDistance: cumulativeDistance + transitionLength,
+              })
+              cumulativeDistance += transitionLength
+            }
+          }
+
+          // Add the connection segment
+          const length = calculatePathLength(nextConnection)
+          const exitAnchor = getExitAnchor(nextConnection, nextReversed)
           segments.push({
-            connection,
-            reversed: true,
+            type: 'connection',
+            connection: nextConnection,
+            reversed: nextReversed,
             startDistance: cumulativeDistance,
             endDistance: cumulativeDistance + length,
           })
           cumulativeDistance += length
-          currentShapeId = connection.fromShapeId
+          currentShapeId = exitAnchor.shapeId
+          currentExitAnchor = exitAnchor.anchor
           foundNext = true
           break
         }
@@ -220,14 +305,17 @@ export function usePathAnimation(
           // Start a new path segment (doesn't connect, but we'll animate through it)
           usedConnections.add(connection.id)
           const length = calculatePathLength(connection)
+          const exitAnchor = getExitAnchor(connection, false)
           segments.push({
+            type: 'connection',
             connection,
             reversed: false,
             startDistance: cumulativeDistance,
             endDistance: cumulativeDistance + length,
           })
           cumulativeDistance += length
-          currentShapeId = connection.toShapeId
+          currentShapeId = exitAnchor.shapeId
+          currentExitAnchor = exitAnchor.anchor
           foundNext = true
           break
         }
@@ -298,13 +386,33 @@ export function usePathAnimation(
     // Clamp segmentProgress to [0, 1] to handle edge cases
     const clampedProgress = Math.max(0, Math.min(1, segmentProgress))
 
-    // Get point on the segment (handling reversed direction)
-    const point = getPointOnPath(segment.connection, clampedProgress, segment.reversed)
+    // Get point on the segment based on type
+    let point: { x: number; y: number } | null = null
+    let connectionId: string | null = null
+
+    if (segment.type === 'connection' && segment.connection) {
+      // Connection segment - use existing path calculation
+      point = getPointOnPath(segment.connection, clampedProgress, segment.reversed || false)
+      connectionId = segment.connection.id
+    } else if (segment.type === 'transition' && segment.shape && segment.fromAnchor !== undefined && segment.toAnchor !== undefined) {
+      // Transition segment - smooth straight line through the shape
+      // Find the previous connection segment to get its ID
+      const segmentIndex = circuit.indexOf(segment)
+      const prevSegment = segmentIndex > 0 ? circuit[segmentIndex - 1] : null
+      connectionId = prevSegment?.type === 'connection' && prevSegment.connection ? prevSegment.connection.id : 'transition'
+      
+      // Get the actual pixel positions for from and to anchors
+      const fromPoint = getPointOnShapePerimeter(segment.shape, segment.fromAnchor)
+      const toPoint = getPointOnShapePerimeter(segment.shape, segment.toAnchor)
+      
+      // Simple linear interpolation between the two points (straight line through shape)
+      point = getPointOnStraightLine(fromPoint, toPoint, clampedProgress)
+    }
     
     const newDots: AnimationDot[] = []
-    if (point) {
+    if (point && connectionId) {
       newDots.push({
-        connectionId: segment.connection.id,
+        connectionId,
         x: point.x,
         y: point.y,
         progress: clampedProgress,
