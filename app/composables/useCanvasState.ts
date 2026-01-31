@@ -1,5 +1,5 @@
 import { ref, computed } from 'vue'
-import type { BaseShape, Connection, ConnectionAnchor, ToolMode, AlignmentGuide, SpacingGuide } from '~/types/canvas'
+import type { BaseShape, Connection, ConnectionAnchor, ToolMode, AlignmentGuide, SpacingGuide, ColorValue } from '~/types/canvas'
 import { useAlignmentGuides } from './useAlignmentGuides'
 
 // Utility functions for connection anchors
@@ -94,8 +94,9 @@ export function getAnchorPosition(shape: BaseShape, anchor: ConnectionAnchor): {
     const bottomEdge = width
     const perimeter = leftEdge + rightEdge + bottomEdge
     
-    // Calculate distance along perimeter
-    let distance = position * perimeter
+    // Calculate distance along perimeter (clockwise from bottom-left)
+    // Order: bottom-left → top-center → bottom-right → bottom-left
+    const distance = position * perimeter
     
     if (distance < leftEdge) {
       // Left edge (bottom-left to top-center)
@@ -104,19 +105,19 @@ export function getAnchorPosition(shape: BaseShape, anchor: ConnectionAnchor): {
         x: bottomLeft.x + (topCenter.x - bottomLeft.x) * t,
         y: bottomLeft.y + (topCenter.y - bottomLeft.y) * t,
       }
-    } else if (distance < leftEdge + bottomEdge) {
-      // Bottom edge (bottom-left to bottom-right)
-      const t = (distance - leftEdge) / bottomEdge
+    } else if (distance < leftEdge + rightEdge) {
+      // Right edge (top-center to bottom-right)
+      const t = (distance - leftEdge) / rightEdge
       return {
-        x: bottomLeft.x + (bottomRight.x - bottomLeft.x) * t,
-        y: bottomLeft.y + (bottomRight.y - bottomLeft.y) * t,
+        x: topCenter.x + (bottomRight.x - topCenter.x) * t,
+        y: topCenter.y + (bottomRight.y - topCenter.y) * t,
       }
     } else {
-      // Right edge (bottom-right to top-center)
-      const t = (distance - leftEdge - bottomEdge) / rightEdge
+      // Bottom edge (bottom-right to bottom-left)
+      const t = (distance - leftEdge - rightEdge) / bottomEdge
       return {
-        x: bottomRight.x + (topCenter.x - bottomRight.x) * t,
-        y: bottomRight.y + (topCenter.y - bottomRight.y) * t,
+        x: bottomRight.x + (bottomLeft.x - bottomRight.x) * t,
+        y: bottomRight.y + (bottomLeft.y - bottomRight.y) * t,
       }
     }
   }
@@ -157,13 +158,80 @@ export function findNearestAnchor(
 }
 
 export function useCanvasState() {
-  const shapes = ref<BaseShape[]>([])
-  const connections = ref<Connection[]>([])
+  const defaultGradient: ColorValue = {
+    type: 'linear',
+    angle: 135,
+    stops: [
+      { offset: 0, color: '#a855f7' },    // Purple-500
+      { offset: 1, color: '#ec4899' }     // Pink-500
+    ]
+  }
+
+  // Calculate exact vertex positions for 20x20 triangle (50% of original 40x40)
+  // Edge order (clockwise from bottom-left): left → right → bottom
+  // leftEdge = sqrt(10^2 + 20^2) ≈ 22.36
+  // rightEdge ≈ 22.36
+  // bottomEdge = 20
+  // perimeter ≈ 64.72
+  const triangleWidth = 20
+  const triangleHeight = 20
+  const leftEdge = Math.sqrt((triangleWidth / 2) ** 2 + triangleHeight ** 2)
+  const rightEdge = leftEdge
+  const bottomEdge = triangleWidth
+  const perimeter = leftEdge + rightEdge + bottomEdge
+  
+  // Vertex positions (normalized 0-1):
+  // - bottom-left vertex: 0.0
+  // - top-center vertex: leftEdge / perimeter ≈ 0.345
+  // - bottom-right vertex: (leftEdge + rightEdge) / perimeter ≈ 0.69
+  const TRIANGLE_BOTTOM_LEFT = 0.0
+  const TRIANGLE_TOP_CENTER = leftEdge / perimeter
+  const TRIANGLE_BOTTOM_RIGHT = (leftEdge + rightEdge) / perimeter
+
+  const shapes = ref<BaseShape[]>([
+    { id: 'shape-default-1', x: 380, y: 200, type: 'triangle', width: 20, height: 20, fill: defaultGradient },
+    { id: 'shape-default-2', x: 280, y: 380, type: 'triangle', width: 20, height: 20, fill: defaultGradient },
+    { id: 'shape-default-3', x: 480, y: 380, type: 'triangle', width: 20, height: 20, fill: defaultGradient },
+  ])
+
+  const connections = ref<Connection[]>([
+    {
+      id: 'connection-default-1',
+      fromShapeId: 'shape-default-1',
+      toShapeId: 'shape-default-2',
+      // Top triangle's bottom-left vertex to bottom-left triangle's top vertex
+      fromAnchor: { position: TRIANGLE_BOTTOM_LEFT },
+      toAnchor: { position: TRIANGLE_TOP_CENTER },
+      stroke: defaultGradient,
+      curveOffset: null,  // straight line
+    },
+    {
+      id: 'connection-default-2',
+      fromShapeId: 'shape-default-2',
+      toShapeId: 'shape-default-3',
+      // Bottom-left triangle's bottom-right vertex to bottom-right triangle's bottom-left vertex
+      fromAnchor: { position: TRIANGLE_BOTTOM_RIGHT },
+      toAnchor: { position: TRIANGLE_BOTTOM_LEFT },
+      stroke: defaultGradient,
+      curveOffset: null,
+    },
+    {
+      id: 'connection-default-3',
+      fromShapeId: 'shape-default-3',
+      toShapeId: 'shape-default-1',
+      // Bottom-right triangle's top vertex to top triangle's bottom-right vertex
+      fromAnchor: { position: TRIANGLE_TOP_CENTER },
+      toAnchor: { position: TRIANGLE_BOTTOM_RIGHT },
+      stroke: defaultGradient,
+      curveOffset: null,
+    },
+  ])
+
   const currentTool = ref<ToolMode>('square')
   const selectedShapeId = ref<string | null>(null)
   const selectedConnectionId = ref<string | null>(null)
   const pendingLineStart = ref<{ shapeId: string; anchor: ConnectionAnchor } | null>(null)
-  const selectedColor = ref<string>('#60a5fa')
+  const selectedColor = ref<ColorValue>(defaultGradient)
   const activeGuides = ref<AlignmentGuide[]>([])
   const spacingGuides = ref<SpacingGuide[]>([])
 
@@ -236,11 +304,40 @@ export function useCanvasState() {
     spacingGuides.value = []
   }
 
-  function updateShapeColor(id: string, color: string) {
+  function updateShapeColor(id: string, color: ColorValue) {
     const shape = shapes.value.find(s => s.id === id)
     if (shape) {
       shape.fill = color
     }
+  }
+
+  function updateShapeSize(id: string, scale: number) {
+    const shape = shapes.value.find(s => s.id === id)
+    if (!shape) return
+    
+    if (shape.type === 'circle') {
+      const currentRadius = shape.radius ?? 20
+      shape.radius = Math.max(10, currentRadius * scale)
+    } else {
+      const currentWidth = shape.width ?? 40
+      const currentHeight = shape.height ?? 40
+      shape.width = Math.max(20, currentWidth * scale)
+      shape.height = Math.max(20, currentHeight * scale)
+    }
+  }
+
+  function scaleAllShapes(scaleFactor: number) {
+    shapes.value.forEach(shape => {
+      if (shape.type === 'circle') {
+        const currentRadius = shape.radius ?? 20
+        shape.radius = Math.max(10, currentRadius * scaleFactor)
+      } else {
+        const currentWidth = shape.width ?? 40
+        const currentHeight = shape.height ?? 40
+        shape.width = Math.max(20, currentWidth * scaleFactor)
+        shape.height = Math.max(20, currentHeight * scaleFactor)
+      }
+    })
   }
 
   // Helper to get shape center (used for anchor calculation)
@@ -251,6 +348,210 @@ export function useCanvasState() {
     const width = shape.width || 40
     const height = shape.height || 40
     return { x: shape.x + width / 2, y: shape.y + height / 2 }
+  }
+
+  /**
+   * Calculate the center point of the bounding box of all shapes
+   */
+  function calculateBoundingBoxCenter(shapes: BaseShape[]): { x: number; y: number } {
+    if (shapes.length === 0) return { x: 0, y: 0 }
+    
+    let minX = Infinity
+    let maxX = -Infinity
+    let minY = Infinity
+    let maxY = -Infinity
+
+    for (const shape of shapes) {
+      const center = getShapeCenter(shape)
+      minX = Math.min(minX, center.x)
+      maxX = Math.max(maxX, center.x)
+      minY = Math.min(minY, center.y)
+      maxY = Math.max(maxY, center.y)
+    }
+
+    return {
+      x: (minX + maxX) / 2,
+      y: (minY + maxY) / 2,
+    }
+  }
+
+  /**
+   * Cluster shapes by distance from center (tolerance-based)
+   */
+  function clusterByDistance(
+    shapesPolar: Array<{ shape: BaseShape; distance: number; angle: number }>,
+    tolerance: number = 20
+  ): Array<Array<{ shape: BaseShape; distance: number; angle: number }>> {
+    const groups: Array<Array<{ shape: BaseShape; distance: number; angle: number }>> = []
+    const used = new Set<number>()
+
+    for (let i = 0; i < shapesPolar.length; i++) {
+      if (used.has(i)) continue
+
+      const group: Array<{ shape: BaseShape; distance: number; angle: number }> = [shapesPolar[i]]
+      used.add(i)
+
+      // Find all shapes within tolerance distance
+      for (let j = i + 1; j < shapesPolar.length; j++) {
+        if (used.has(j)) continue
+        if (Math.abs(shapesPolar[i].distance - shapesPolar[j].distance) <= tolerance) {
+          group.push(shapesPolar[j])
+          used.add(j)
+        }
+      }
+
+      groups.push(group)
+    }
+
+    return groups
+  }
+
+  /**
+   * Apply symmetry transformation to all shapes
+   * Adjusts shape positions to create 4-way symmetry around the center
+   */
+  function applySymmetry(): void {
+    const allShapes = shapes.value
+    if (allShapes.length < 2) return
+
+    // 1. Find center of bounding box
+    const center = calculateBoundingBoxCenter(allShapes)
+
+    // 2. Convert shapes to polar coordinates (distance, angle from center)
+    const shapesPolar = allShapes.map(s => {
+      const shapeCenter = getShapeCenter(s)
+      const dx = shapeCenter.x - center.x
+      const dy = shapeCenter.y - center.y
+      const distance = Math.sqrt(dx * dx + dy * dy)
+      const angle = Math.atan2(dy, dx)
+      return {
+        shape: s,
+        distance,
+        angle,
+      }
+    })
+
+    // 3. Group by distance (tolerance-based clustering)
+    const groups = clusterByDistance(shapesPolar, 30)
+
+    // 4. For each group, make symmetric
+    for (const group of groups) {
+      if (group.length === 1) {
+        // Single shape: keep at center if very close, otherwise leave as-is
+        const item = group[0]
+        if (item.distance < 10) {
+          // Very close to center, keep it there
+          const shapeCenter = getShapeCenter(item.shape)
+          if (item.shape.type === 'circle') {
+            item.shape.x = center.x
+            item.shape.y = center.y
+          } else {
+            const width = item.shape.width || 40
+            const height = item.shape.height || 40
+            item.shape.x = center.x - width / 2
+            item.shape.y = center.y - height / 2
+          }
+        }
+        continue
+      }
+
+      // Average distance for the group
+      const avgDistance = group.reduce((sum, g) => sum + g.distance, 0) / group.length
+
+      // Distribute evenly around circle
+      const angleStep = (2 * Math.PI) / group.length
+
+      group.forEach((item, i) => {
+        const newAngle = i * angleStep
+        const newCenterX = center.x + avgDistance * Math.cos(newAngle)
+        const newCenterY = center.y + avgDistance * Math.sin(newAngle)
+
+        // Update shape position based on type
+        if (item.shape.type === 'circle') {
+          // For circles, x/y is the center
+          item.shape.x = newCenterX
+          item.shape.y = newCenterY
+        } else {
+          // For squares and triangles, x/y is top-left, so adjust accordingly
+          const width = item.shape.width || 40
+          const height = item.shape.height || 40
+          item.shape.x = newCenterX - width / 2
+          item.shape.y = newCenterY - height / 2
+        }
+      })
+    }
+
+    // 5. Recalculate connection anchors - all anchors face toward constellation center
+    for (const connection of connections.value) {
+      const fromShape = shapes.value.find(s => s.id === connection.fromShapeId)
+      const toShape = shapes.value.find(s => s.id === connection.toShapeId)
+      
+      if (fromShape && toShape) {
+        // Get anchor that faces toward the constellation center
+        // Returns the position for the CENTER of each edge (not corners)
+        const getCenterFacingAnchor = (shape: BaseShape): number => {
+          const shapeCenter = getShapeCenter(shape)
+          const dx = center.x - shapeCenter.x
+          const dy = center.y - shapeCenter.y
+          
+          // Determine which edge faces the center
+          const facesRight = Math.abs(dx) > Math.abs(dy) && dx > 0
+          const facesLeft = Math.abs(dx) > Math.abs(dy) && dx <= 0
+          const facesBottom = Math.abs(dy) >= Math.abs(dx) && dy > 0
+          const facesTop = Math.abs(dy) >= Math.abs(dx) && dy <= 0
+          
+          if (shape.type === 'circle') {
+            // For circles, 0=top, 0.25=right, 0.5=bottom, 0.75=left
+            if (facesTop) return 0
+            if (facesRight) return 0.25
+            if (facesBottom) return 0.5
+            if (facesLeft) return 0.75
+          } else if (shape.type === 'square') {
+            // For squares, calculate position for edge centers
+            // Perimeter walk: top edge → right edge → bottom edge → left edge
+            // For 40x40: perimeter=160, top center=20, right center=60, bottom center=100, left center=140
+            const width = shape.width || 40
+            const height = shape.height || 40
+            const perimeter = (width + height) * 2
+            
+            if (facesTop) return (width / 2) / perimeter                           // top center
+            if (facesRight) return (width + height / 2) / perimeter                 // right center
+            if (facesBottom) return (width + height + width / 2) / perimeter        // bottom center
+            if (facesLeft) return (width + height + width + height / 2) / perimeter // left center
+          } else if (shape.type === 'triangle') {
+            // Triangle: bottom-left → top-center → bottom-right (3 edges)
+            // For simplicity, use approximate positions for edge midpoints
+            if (facesTop) return 0.25        // midpoint of left edge (going up)
+            if (facesRight) return 0.58      // midpoint of right edge (going down)
+            if (facesBottom) return 0.75     // midpoint of bottom edge
+            if (facesLeft) return 0.08       // near start of left edge
+          }
+          
+          return 0 // fallback
+        }
+        
+        connection.fromAnchor = { position: getCenterFacingAnchor(fromShape) }
+        connection.toAnchor = { position: getCenterFacingAnchor(toShape) }
+      }
+    }
+
+    // 6. Normalize curve offsets to uniform magnitude
+    const UNIFORM_ARC_DISTANCE = 40  // pixels from the straight line
+
+    for (const connection of connections.value) {
+      if (connection.curveOffset !== null) {
+        const magnitude = Math.sqrt(
+          connection.curveOffset.x ** 2 + connection.curveOffset.y ** 2
+        )
+        if (magnitude > 0) {
+          // Normalize to uniform distance while preserving direction
+          connection.curveOffset = {
+            x: (connection.curveOffset.x / magnitude) * UNIFORM_ARC_DISTANCE,
+            y: (connection.curveOffset.y / magnitude) * UNIFORM_ARC_DISTANCE,
+          }
+        }
+      }
+    }
   }
 
   // Helper to calculate default curve offset
@@ -311,7 +612,7 @@ export function useCanvasState() {
     }
   }
 
-  function updateConnectionColor(id: string, color: string) {
+  function updateConnectionColor(id: string, color: ColorValue) {
     const connection = connections.value.find(c => c.id === id)
     if (connection) {
       connection.stroke = color
@@ -363,8 +664,11 @@ export function useCanvasState() {
 
   function setTool(tool: ToolMode) {
     currentTool.value = tool
-    selectedShapeId.value = null
-    selectedConnectionId.value = null
+    // Keep selections when switching to pan mode for easier editing
+    if (tool !== 'pan') {
+      selectedShapeId.value = null
+      selectedConnectionId.value = null
+    }
     pendingLineStart.value = null
   }
 
@@ -463,6 +767,8 @@ export function useCanvasState() {
     removeShape,
     updateShapePosition,
     updateShapeColor,
+    updateShapeSize,
+    scaleAllShapes,
     addConnection,
     removeConnection,
     updateConnectionColor,
@@ -477,5 +783,6 @@ export function useCanvasState() {
     handleCanvasClick,
     computeGuidesForDrag,
     clearGuides,
+    applySymmetry,
   }
 }

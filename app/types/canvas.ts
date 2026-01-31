@@ -1,3 +1,16 @@
+export interface GradientStop {
+  offset: number  // 0-1
+  color: string
+}
+
+export interface GradientConfig {
+  type: 'linear' | 'radial'
+  angle?: number  // For linear gradients (degrees)
+  stops: GradientStop[]
+}
+
+export type ColorValue = string | GradientConfig
+
 export interface BaseShape {
   id: string
   x: number
@@ -6,7 +19,7 @@ export interface BaseShape {
   width?: number
   height?: number
   radius?: number
-  fill: string
+  fill: ColorValue
 }
 
 export interface ConnectionAnchor {
@@ -22,7 +35,7 @@ export interface Connection {
   toShapeId: string
   fromAnchor: ConnectionAnchor
   toAnchor: ConnectionAnchor
-  stroke: string
+  stroke: ColorValue
   // null = straight line, { x, y } = offset from midpoint for curve control
   curveOffset: { x: number; y: number } | null
 }
@@ -44,8 +57,10 @@ export type ToolMode = 'pan' | 'square' | 'triangle' | 'circle' | 'line' | 'curv
 
 export interface AnimationConfig {
   enabled: boolean
-  speed: number  // 0.5 to 3.0 multiplier
+  speed: number  // 0.25 to 6.0 multiplier
+  animationMode: 'dot' | 'snake'
   dotSize: number
   dotColor: string
-  trailLength: number  // 0 = no trail, 1 = full path
+  snakeLength: number  // 0-1 representing percentage of total path length
+  rotationSpeed: number  // Degrees per second (0 = disabled, positive = clockwise, negative = counter-clockwise)
 }

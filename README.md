@@ -1,75 +1,42 @@
-# Nuxt Minimal Starter
+# loading-utils
 
-Look at the [Nuxt documentation](https://nuxt.com/docs/getting-started/introduction) to learn more.
+A canvas-based editor for creating custom loading animations. Built with Nuxt 4, Vue 3, and Konva.
 
-## Setup
+## Installation
 
-Make sure to install dependencies:
+**Prerequisites:** Node.js 18+ and [bun](https://bun.sh)
 
 ```bash
-# npm
-npm install
-
-# pnpm
-pnpm install
-
-# yarn
-yarn install
-
-# bun
 bun install
 ```
 
-## Development Server
-
-Start the development server on `http://localhost:3000`:
+## Development
 
 ```bash
-# npm
-npm run dev
-
-# pnpm
-pnpm dev
-
-# yarn
-yarn dev
-
-# bun
 bun run dev
 ```
 
-## Production
+Visit `http://localhost:3000` to view the application.
 
-Build the application for production:
+## Build
 
 ```bash
-# npm
-npm run build
-
-# pnpm
-pnpm build
-
-# yarn
-yarn build
-
-# bun
 bun run build
 ```
 
-Locally preview production build:
+## Contributing
 
-```bash
-# npm
-npm run preview
+Contributions are welcome! Please follow these steps:
 
-# pnpm
-pnpm preview
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Make your changes and add tests if applicable
+4. Commit your changes (`git commit -m 'Add some amazing feature'`)
+5. Push to the branch (`git push origin feature/amazing-feature`)
+6. Open a Pull Request with a clear description of your changes
 
-# yarn
-yarn preview
+If your PR addresses an issue, please link it in the description.
 
-# bun
-bun run preview
-```
+## License
 
-Check out the [deployment documentation](https://nuxt.com/docs/getting-started/deployment) for more information.
+MIT License - see [LICENSE](LICENSE) file for details.
