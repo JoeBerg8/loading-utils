@@ -60,6 +60,14 @@ export function usePathAnimation(
     return Math.sqrt(dx * dx + dy * dy)
   }
 
+  // Smooth ease-in-out cubic function for transitions
+  // Creates smooth acceleration at start and deceleration at end
+  function easeInOutCubic(t: number): number {
+    return t < 0.5
+      ? 4 * t * t * t
+      : 1 - Math.pow(-2 * t + 2, 3) / 2
+  }
+
   // Calculate point on straight line at progress t (0-1)
   function getPointOnStraightLine(
     from: { x: number; y: number },
@@ -395,18 +403,22 @@ export function usePathAnimation(
       point = getPointOnPath(segment.connection, clampedProgress, segment.reversed || false)
       connectionId = segment.connection.id
     } else if (segment.type === 'transition' && segment.shape && segment.fromAnchor !== undefined && segment.toAnchor !== undefined) {
-      // Transition segment - smooth straight line through the shape
+      // Transition segment - smooth curved path through the shape with easing
       // Find the previous connection segment to get its ID
       const segmentIndex = circuit.indexOf(segment)
       const prevSegment = segmentIndex > 0 ? circuit[segmentIndex - 1] : null
       connectionId = prevSegment?.type === 'connection' && prevSegment.connection ? prevSegment.connection.id : 'transition'
       
+      // Apply easing to create smooth acceleration/deceleration
+      const easedProgress = easeInOutCubic(clampedProgress)
+      
       // Get the actual pixel positions for from and to anchors
       const fromPoint = getPointOnShapePerimeter(segment.shape, segment.fromAnchor)
       const toPoint = getPointOnShapePerimeter(segment.shape, segment.toAnchor)
       
-      // Simple linear interpolation between the two points (straight line through shape)
-      point = getPointOnStraightLine(fromPoint, toPoint, clampedProgress)
+      // Use quadratic bezier curve through shape center for natural arc
+      const center = getShapeCenter(segment.shape)
+      point = getPointOnCurve(fromPoint, center, toPoint, easedProgress)
     }
     
     const newDots: AnimationDot[] = []
